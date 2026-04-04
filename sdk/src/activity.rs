@@ -143,6 +143,22 @@ impl Default for ActivityKind {
     }
 }
 
+#[derive(
+    serde_repr::Serialize_repr, serde_repr::Deserialize_repr, PartialEq, Eq, Debug, Copy, Clone,
+)]
+#[repr(u8)]
+pub enum StatusDisplayKind {
+    Name = 0,
+    State = 1,
+    Details = 2,
+}
+    
+impl Default for StatusDisplayKind {
+    fn default() -> Self {
+        Self::Name
+    }
+}
+
 /// The activity kinds you can invite a [`User`](crate::user::User) to engage in.
 ///
 /// [API docs](https://discord.com/developers/docs/game-sdk/activities#data-models-activityactiontype-enum)
@@ -203,6 +219,8 @@ impl From<bool> for JoinRequestReply {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Activity {
+    /// The override for the activity name
+    pub name: Option<String>,
     /// The player's current party status
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
@@ -224,6 +242,8 @@ pub struct Activity {
     pub buttons_or_secrets: Option<ButtonsOrSecrets>,
     #[serde(rename = "type")]
     pub kind: ActivityKind,
+    #[serde(rename = "status_display_type", skip_serializing_if = "Option::is_none")]
+    pub status_display_kind: Option<StatusDisplayKind>,
     #[serde(default)]
     /// Whether this activity is an instanced context, like a match
     pub instance: bool,
@@ -521,6 +541,36 @@ impl ActivityBuilder {
             None => {
                 self.inner.activity = Some(Activity {
                     party,
+                    ..Default::default()
+                });
+            }
+        }
+
+        self
+    }
+
+    /// Sets the kind of status to display for this activity
+    pub fn status_display_kind(mut self, kind: StatusDisplayKind) -> Self {
+        match &mut self.inner.activity {
+            Some(activity) => activity.status_display_kind = Some(kind),
+            None => {
+                self.inner.activity = Some(Activity {
+                    status_display_kind: Some(kind),
+                    ..Default::default()
+                });
+            }
+        }
+        self
+    }
+
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        let name = truncate(Some(name), "Activity Name");
+
+        match &mut self.inner.activity {
+            Some(activity) => activity.name = name,
+            None => {
+                self.inner.activity = Some(Activity {
+                    name,
                     ..Default::default()
                 });
             }
