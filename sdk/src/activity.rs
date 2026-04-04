@@ -3,7 +3,7 @@
 
 pub mod events;
 
-use crate::{user::UserId, Command, CommandKind, Error};
+use crate::{Command, CommandKind, Error, Snowflake, user::UserId};
 use serde::{Deserialize, Serialize};
 
 /// A party is a uniquely identified group of users, but Discord doesn't really
@@ -19,6 +19,19 @@ pub struct Party {
     pub size: Option<(u32, u32)>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub privacy: Option<PartyPrivacy>,
+}
+
+/// An emoji to be shown in the activity
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+pub struct ActivityEmoji {
+    /// A unique name for this emoji
+    pub name: String,
+    /// The emoji snowflake ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<Snowflake>,
+    /// Whether this emoji is animated
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub animated: Option<bool>,
 }
 
 #[derive(
@@ -67,9 +80,15 @@ pub struct Assets {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub large_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub large_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub small_image: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub small_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub small_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invite_cover_image: Option<String>,
 }
 
 impl Assets {
@@ -83,7 +102,7 @@ impl Assets {
     /// Key images are limited to 32 bytes on the server, and any keys over that are
     /// discarded, however, URL-proxied keys have no such limit. The image text is
     /// limited to 128 bytes and will be truncated if longer than that.
-    pub fn large(mut self, key: impl Into<String>, text: Option<impl Into<String>>) -> Self {
+    pub fn large(mut self, key: impl Into<String>, text: Option<impl Into<String>>, url: Option<impl Into<String>>) -> Self {
         let key = key.into();
         if !Self::validate_key(&key) {
             tracing::warn!("Large Image Key '{key}' is invalid, disregarding");
@@ -92,6 +111,8 @@ impl Assets {
 
         self.large_image = Some(key);
         self.large_text = truncate(text, "Large Image Text");
+        self.large_url = url.map(|u| u.into());
+
         self
     }
 
@@ -100,7 +121,7 @@ impl Assets {
     /// Key images are limited to 32 bytes on the server, and any keys over that are
     /// discarded, however, URL-proxied keys have no such limit. The image text is
     /// limited to 128 bytes and will be truncated if longer than that.
-    pub fn small(mut self, key: impl Into<String>, text: Option<impl Into<String>>) -> Self {
+    pub fn small(mut self, key: impl Into<String>, text: Option<impl Into<String>>, url: Option<impl Into<String>>) -> Self {
         let key = key.into();
         if !Self::validate_key(&key) {
             tracing::warn!("Small Image Key '{key}' is invalid, disregarding");
@@ -109,6 +130,14 @@ impl Assets {
 
         self.small_image = Some(key);
         self.small_text = truncate(text, "Small Image Text");
+        self.small_url = url.map(|u| u.into());
+
+        self
+    }
+
+    /// Sets the invite cover image to use for the rich presence profile
+    pub fn invite_cover(mut self, url: impl Into<String>) -> Self {
+        self.invite_cover_image = Some(url.into());
         self
     }
 }
@@ -224,9 +253,18 @@ pub struct Activity {
     /// The player's current party status
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
+    /// Link to the player's current party status
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_url: Option<String>,
     /// What the player is currently doing
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
+    /// Link to what the player is currently doing
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details_url: Option<String>,
+    /// An emoji to display in the activity
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emoji: Option<ActivityEmoji>,
     /// Helps create elapsed/remaining timestamps on a player's profile
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamps: Option<Timestamps>,
@@ -326,7 +364,7 @@ impl From<ActivityBuilder> for ActivityArgs {
 
 #[derive(Default, Debug)]
 pub struct ActivityBuilder {
-    pub(crate) inner: ActivityArgs,
+    pub inner: ActivityArgs,
 }
 
 impl ActivityBuilder {
@@ -343,6 +381,24 @@ impl ActivityBuilder {
             },
         }
     }
+
+    /// Sets the name of the current activity
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        let name = truncate(Some(name), "Activity Name");
+
+        match &mut self.inner.activity {
+            Some(activity) => activity.name = name,
+            None => {
+                self.inner.activity = Some(Activity {
+                    name,
+                    ..Default::default()
+                });
+            }
+        }
+
+        self
+    }
+
     /// The user's currenty party status, eg. "Playing Solo".
     ///
     /// Limited to 128 bytes.
@@ -362,6 +418,23 @@ impl ActivityBuilder {
         self
     }
 
+    /// Link to the user's current party status
+    pub fn state_url(mut self, url: impl Into<String>) -> Self {
+        let url = Some(url.into());
+
+        match &mut self.inner.activity {
+            Some(activity) => activity.state_url = url,
+            None => {
+                self.inner.activity = Some(Activity {
+                    state_url: url,
+                    ..Default::default()
+                });
+            }
+        }
+
+        self
+    }
+
     /// What the player is doing, eg. "Exploring the Wilds of Outland".
     ///
     /// Limited to 128 bytes.
@@ -373,6 +446,44 @@ impl ActivityBuilder {
             None => {
                 self.inner.activity = Some(Activity {
                     details,
+                    ..Default::default()
+                });
+            }
+        }
+
+        self
+    }
+
+    /// Link to what the player is doing, eg. a match or level they're playing.
+    pub fn details_url(mut self, url: impl Into<String>) -> Self {
+        let url = Some(url.into());
+
+        match &mut self.inner.activity {
+            Some(activity) => activity.details_url = url,
+            None => {
+                self.inner.activity = Some(Activity {
+                    details_url: url,
+                    ..Default::default()
+                });
+            }
+        }
+
+        self
+    }
+
+    /// An emoji to display in the activity
+    pub fn emoji(mut self, name: impl Into<String>, id: Option<Snowflake>, animated: Option<bool>) -> Self {
+        let emoji = Some(ActivityEmoji {
+            name: name.into(),
+            id,
+            animated,
+        });
+
+        match &mut self.inner.activity {
+            Some(activity) => activity.emoji = emoji,
+            None => {
+                self.inner.activity = Some(Activity {
+                    emoji,
                     ..Default::default()
                 });
             }
@@ -549,36 +660,6 @@ impl ActivityBuilder {
         self
     }
 
-    /// Sets the kind of status to display for this activity
-    pub fn status_display_kind(mut self, kind: StatusDisplayKind) -> Self {
-        match &mut self.inner.activity {
-            Some(activity) => activity.status_display_kind = Some(kind),
-            None => {
-                self.inner.activity = Some(Activity {
-                    status_display_kind: Some(kind),
-                    ..Default::default()
-                });
-            }
-        }
-        self
-    }
-
-    pub fn name(mut self, name: impl Into<String>) -> Self {
-        let name = truncate(Some(name), "Activity Name");
-
-        match &mut self.inner.activity {
-            Some(activity) => activity.name = name,
-            None => {
-                self.inner.activity = Some(Activity {
-                    name,
-                    ..Default::default()
-                });
-            }
-        }
-
-        self
-    }
-
     /// Whether this activity is an instanced context, like a match
     pub fn instance(mut self, is_instance: bool) -> Self {
         match &mut self.inner.activity {
@@ -657,6 +738,21 @@ impl ActivityBuilder {
         }
         self
     }
+
+        /// Sets the kind of status to display for this activity
+    pub fn status_display_kind(mut self, kind: StatusDisplayKind) -> Self {
+        match &mut self.inner.activity {
+            Some(activity) => activity.status_display_kind = Some(kind),
+            None => {
+                self.inner.activity = Some(Activity {
+                    status_display_kind: Some(kind),
+                    ..Default::default()
+                });
+            }
+        }
+        self
+    }
+
 }
 
 impl crate::Discord {
